@@ -1,0 +1,13 @@
+class Counter shuru
+    int32 value
+    method int32 add(int32 amount) shuru
+        this.value medalo this.value + amount
+        return this.value
+    khtm
+khtm
+object Counter counter
+int32 result
+counter medalo new Counter()
+counter.value medalo 10
+result medalo counter.add(5)
+print result

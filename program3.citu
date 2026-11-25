@@ -1,0 +1,21 @@
+class Worker shuru
+    int32 rate
+    method int32 pay(int32 hours) shuru
+        return hours * this.rate
+    khtm
+khtm
+class Senior extends Worker shuru
+    int32 bonus
+    method int32 pay(int32 hours) shuru
+        return hours * this.rate + this.bonus
+    khtm
+khtm
+object Senior senior
+object Worker worker
+int32 result
+senior medalo new Senior()
+senior.bonus medalo 20
+worker medalo senior
+worker.rate medalo 10
+result medalo worker.pay(4)
+print result

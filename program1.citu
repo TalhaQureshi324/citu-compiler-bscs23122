@@ -1,0 +1,22 @@
+uint16 i
+uint32 total
+int16 status
+char grade
+total medalo 0
+status medalo 0
+for (i medalo 1; i <= 5; i medalo i + 1) shuru
+    total medalo total + i
+khtm
+agr (total = 15) shuru
+    status medalo 1
+    grade medalo 'A'
+khtm
+wrna (total > 10) shuru
+    grade medalo 'B'
+khtm
+wrna_phir shuru
+    grade medalo 'C'
+khtm
+print total
+print status
+print grade
