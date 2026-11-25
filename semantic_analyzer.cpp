@@ -34,6 +34,12 @@ struct Ctx {
     bool inMethod;
     string methodName;
 };
+struct Flow {
+    set<int> facts;
+    bool reachable;
+};
+
+static set<int> assigned;
 
 static vector<Sym> symbols;
 static vector<Scope> scopes;
@@ -373,6 +379,9 @@ static string checkExpr(Node* n, int scopeIdx, Ctx ctx) {
             report(n->line, "undeclared variable '" + n->text + "'");
             return "error";
         }
+        if (symbols[id].kind == "var" && assigned.find(id) == assigned.end()) {
+            report(n->line, "read of possibly unassigned variable '" + n->text + "'");
+        }
         return internalType(symbols[id].type);
     }
     if (n->kind == "This") {
@@ -489,9 +498,11 @@ static void checkCond(Node* n, int scopeIdx, Ctx ctx) {
     }
 }
 
-static void checkBlock(Node* block, int parentScope, Ctx ctx);
+static void checkBlock(Node* block, int parentScope, Ctx ctx, const Flow& in, Flow& out);
 
-static void checkAssignNode(Node* n, int scopeIdx, Ctx ctx) {
+static void checkAssignNode(Node* n, int scopeIdx, Ctx ctx, const Flow& in, Flow& out) {
+    assigned = in.facts;
+    out = in;
     Node* tgt = n->kids[0];
     Node* val = n->kids[1];
     if (tgt->kind == "This") {
@@ -507,7 +518,9 @@ static void checkAssignNode(Node* n, int scopeIdx, Ctx ctx) {
             return;
         }
         string vt = checkExpr(val, scopeIdx, ctx);
-        checkAssign(symbols[id].type, vt, val, n->line);
+        if (checkAssign(symbols[id].type, vt, val, n->line)) {
+            out.facts.insert(id);
+        }
         return;
     }
     string rt = checkExpr(tgt->kids[0], scopeIdx, ctx);
@@ -526,7 +539,9 @@ static void checkAssignNode(Node* n, int scopeIdx, Ctx ctx) {
     checkAssign(f.type, vt, val, n->line);
 }
 
-static void checkStmt(Node* n, int scopeIdx, Ctx ctx) {
+static void checkStmt(Node* n, int scopeIdx, Ctx ctx, const Flow& in, Flow& out) {
+    assigned = in.facts;
+    out = in;
     if (n->kind == "Decl") {
         if (n->type.length() > 7 && n->type.substr(0, 7) == "object:") {
             string cname = n->type.substr(7);
@@ -534,40 +549,75 @@ static void checkStmt(Node* n, int scopeIdx, Ctx ctx) {
                 report(n->line, "unknown class '" + cname + "' in declaration of '" + n->text + "'");
             }
         }
-        declare(scopeIdx, n->text, "var", n->type, ctx.inMethod ? ("m:" + classes[ctx.classId].name + "." + ctx.methodName) : "main", n->line);
+        declare(scopeIdx, n->text, "var", n->type, ctx.inMethod ? ("c" + to_string(ctx.classId) + "." + ctx.methodName) : "main", n->line);
     }
     else if (n->kind == "Assign") {
-        checkAssignNode(n, scopeIdx, ctx);
+        checkAssignNode(n, scopeIdx, ctx, in, out);
     }
     else if (n->kind == "While") {
         checkCond(n->kids[0], scopeIdx, ctx);
-        ctx.loopDepth++;
-        checkBlock(n->kids[1], scopeIdx, ctx);
+        Ctx bodyCtx = ctx;
+        bodyCtx.loopDepth++;
+        Flow bin = in;
+        Flow bout;
+        checkBlock(n->kids[1], scopeIdx, bodyCtx, bin, bout);
+        out = in;
     }
     else if (n->kind == "For") {
-        checkAssignNode(n->kids[0], scopeIdx, ctx);
+        Flow finit;
+        checkAssignNode(n->kids[0], scopeIdx, ctx, in, finit);
+        assigned = finit.facts;
         checkCond(n->kids[1], scopeIdx, ctx);
-        checkAssignNode(n->kids[2], scopeIdx, ctx);
-        ctx.loopDepth++;
-        checkBlock(n->kids[3], scopeIdx, ctx);
+        Ctx bodyCtx = ctx;
+        bodyCtx.loopDepth++;
+        Flow bin = finit;
+        Flow bout;
+        checkBlock(n->kids[3], scopeIdx, bodyCtx, bin, bout);
+        Flow fupd;
+        checkAssignNode(n->kids[2], scopeIdx, ctx, finit, fupd);
+        out = finit;
     }
     else if (n->kind == "If") {
+        vector<Flow> exits;
+        bool hasElse = false;
         for (int i = 0; i < (int)n->kids.size(); i++) {
             Node* k = n->kids[i];
             if (k->kind == "Branch") {
+                assigned = in.facts;
                 checkCond(k->kids[0], scopeIdx, ctx);
-                checkBlock(k->kids[1], scopeIdx, ctx);
+                Flow bo;
+                checkBlock(k->kids[1], scopeIdx, ctx, in, bo);
+                if (bo.reachable) exits.push_back(bo);
             }
             else {
-                checkBlock(k, scopeIdx, ctx);
+                Flow eo;
+                checkBlock(k, scopeIdx, ctx, in, eo);
+                if (eo.reachable) exits.push_back(eo);
+                hasElse = true;
             }
         }
+        if (!hasElse) exits.push_back(in);
+        if (exits.empty()) {
+            out.reachable = false;
+            return;
+        }
+        out.reachable = true;
+        set<int> inter = exits[0].facts;
+        for (int i = 1; i < (int)exits.size(); i++) {
+            for (set<int>::iterator it = inter.begin(); it != inter.end();) {
+                if (exits[i].facts.find(*it) == exits[i].facts.end()) it = inter.erase(it);
+                else ++it;
+            }
+        }
+        out.facts = inter;
     }
     else if (n->kind == "Break") {
         if (ctx.loopDepth == 0) report(n->line, "break outside a loop");
+        out.reachable = false;
     }
     else if (n->kind == "Continue") {
         if (ctx.loopDepth == 0) report(n->line, "continue outside a loop");
+        out.reachable = false;
     }
     else if (n->kind == "Return") {
         if (!ctx.inMethod) {
@@ -577,20 +627,51 @@ static void checkStmt(Node* n, int scopeIdx, Ctx ctx) {
         }
         string vt = checkExpr(n->kids[0], scopeIdx, ctx);
         checkAssign(ctx.ret, vt, n->kids[0], n->line);
+        out.reachable = false;
     }
     else if (n->kind == "Print") {
         checkExpr(n->kids[0], scopeIdx, ctx);
+        out = in;
     }
     else if (n->kind == "Block") {
-        checkBlock(n, scopeIdx, ctx);
+        checkBlock(n, scopeIdx, ctx, in, out);
     }
 }
 
-static void checkBlock(Node* block, int parentScope, Ctx ctx) {
+static void checkBlock(Node* block, int parentScope, Ctx ctx, const Flow& in, Flow& out) {
     int sc = newScope(parentScope);
+    Flow cur = in;
     for (int i = 0; i < (int)block->kids.size(); i++) {
-        checkStmt(block->kids[i], sc, ctx);
+        Flow so;
+        checkStmt(block->kids[i], sc, ctx, cur, so);
+        cur = so;
     }
+    out = cur;
+}
+
+static bool definitelyReturns(Node* n) {
+    if (n->kind == "Return") return true;
+    if (n->kind == "Block") {
+        for (int i = 0; i < (int)n->kids.size(); i++) {
+            if (definitelyReturns(n->kids[i])) return true;
+        }
+        return false;
+    }
+    if (n->kind == "If") {
+        bool hasElse = false;
+        for (int i = 0; i < (int)n->kids.size(); i++) {
+            Node* k = n->kids[i];
+            if (k->kind == "Branch") {
+                if (!definitelyReturns(k->kids[1])) return false;
+            }
+            else if (k->kind == "Block") {
+                if (!definitelyReturns(k)) return false;
+                hasElse = true;
+            }
+        }
+        return hasElse;
+    }
+    return false;
 }
 
 static void checkMethod(Node* m, int cid) {
@@ -602,13 +683,20 @@ static void checkMethod(Node* m, int cid) {
     ctx.methodName = m->text;
     int sc = newScope(-1);
     curSlot = 0;
+    Flow in;
+    in.reachable = true;
     for (int i = 0; i < (int)m->kids.size(); i++) {
         Node* k = m->kids[i];
         if (k->kind == "Param") {
-            declare(sc, k->text, "param", k->type, "c" + to_string(cid) + "." + m->text, k->line);
+            int id = declare(sc, k->text, "param", k->type, "c" + to_string(cid) + "." + m->text, k->line);
+            if (id != -1) in.facts.insert(id);
         }
     }
-    checkBlock(m->kids[m->kids.size() - 1], sc, ctx);
+    Flow out;
+    checkBlock(m->kids[m->kids.size() - 1], sc, ctx, in, out);
+    if (!definitelyReturns(m->kids[m->kids.size() - 1])) {
+        report(m->line, "method '" + m->text + "' may finish without returning a value");
+    }
 }
 
 static void printSymbols() {
@@ -691,9 +779,15 @@ int main(int argc, char* argv[]) {
     mainCtx.methodName = "";
     int mainScope = newScope(-1);
     curSlot = 0;
+    Flow mainIn;
+    mainIn.reachable = true;
+    Flow mainOut;
     for (int i = 0; i < (int)ast->kids.size(); i++) {
         Node* k = ast->kids[i];
-        if (k->kind != "Class") checkStmt(k, mainScope, mainCtx);
+        if (k->kind != "Class") {
+            checkStmt(k, mainScope, mainCtx, mainIn, mainOut);
+            mainIn = mainOut;
+        }
     }
     printSymbols();
     printClasses();

@@ -578,6 +578,7 @@ static Node* convTerm(PNode* p) {
     PNode* tail = p->kids[1];
     while (tail->kids[0]->sym != "EPS") {
         Node* b = new Node("Binary", tail->kids[0]->sym);
+        b->line = tail->kids[0]->line;
         b->kids.push_back(n);
         b->kids.push_back(convUnary(tail->kids[1]));
         n = b;
@@ -591,6 +592,7 @@ static Node* convAdd(PNode* p) {
     PNode* tail = p->kids[1];
     while (tail->kids[0]->sym != "EPS") {
         Node* b = new Node("Binary", tail->kids[0]->sym);
+        b->line = tail->kids[0]->line;
         b->kids.push_back(n);
         b->kids.push_back(convTerm(tail->kids[1]));
         n = b;
@@ -604,6 +606,7 @@ static Node* convRelExpr(PNode* p) {
     PNode* tail = p->kids[1];
     if (tail->kids[0]->sym != "EPS") {
         Node* b = new Node("Binary", tail->kids[0]->kids[0]->sym);
+        b->line = tail->kids[0]->kids[0]->line;
         b->kids.push_back(n);
         b->kids.push_back(convAdd(tail->kids[1]));
         n = b;
@@ -616,6 +619,7 @@ static Node* convAndExpr(PNode* p) {
     PNode* tail = p->kids[1];
     while (tail->kids[0]->sym != "EPS") {
         Node* b = new Node("Binary", "and");
+        b->line = tail->kids[0]->line;
         b->kids.push_back(n);
         b->kids.push_back(convRelExpr(tail->kids[1]));
         n = b;
@@ -629,6 +633,7 @@ static Node* convOrExpr(PNode* p) {
     PNode* tail = p->kids[1];
     while (tail->kids[0]->sym != "EPS") {
         Node* b = new Node("Binary", "or");
+        b->line = tail->kids[0]->line;
         b->kids.push_back(n);
         b->kids.push_back(convAndExpr(tail->kids[1]));
         n = b;
